@@ -246,12 +246,17 @@
     <span class="param-val" id="p-out">20%</span>
   </div>
   <div class="param-row">
-    <span class="param-label">Attempt cost</span>
+    <span class="param-label">Attempt cost (Traces)</span>
     <input type="range" id="catt" min="100" max="5000" step="100" value="1200">
     <span class="param-val" id="catt-out">1,200</span>
   </div>
   <div class="param-row">
-    <span class="param-label">Reset cost</span>
+    <span class="param-label">Attempt cost (Mesos)</span>
+    <input type="range" id="cmeso" min="0" max="500000" step="5000" value="75000">
+    <span class="param-val" id="cmeso-out">75,000</span>
+  </div>
+  <div class="param-row">
+    <span class="param-label">Reset cost (Traces)</span>
     <input type="range" id="cres" min="0" max="500" step="10" value="50">
     <span class="param-val" id="cres-out">50</span>
   </div>
@@ -296,6 +301,24 @@
     <p class="metric-label">Savings from optimal play</p>
     <p class="metric-val" id="ev-save" style="color:var(--green)">—</p>
     <p class="metric-unit">spell traces</p>
+  </div>
+</div>
+
+<div class="metrics-grid">
+  <div class="metric">
+    <p class="metric-label">Expected meso cost (optimal)</p>
+    <p class="metric-val" id="meso-opt">—</p>
+    <p class="metric-unit">mesos</p>
+  </div>
+  <div class="metric">
+    <p class="metric-label">Meso cost without smart resets</p>
+    <p class="metric-val" id="meso-naive">—</p>
+    <p class="metric-unit">mesos</p>
+  </div>
+  <div class="metric">
+    <p class="metric-label">Meso savings from optimal play</p>
+    <p class="metric-val" id="meso-save" style="color:var(--green)">—</p>
+    <p class="metric-unit">mesos</p>
   </div>
 </div>
 
@@ -372,18 +395,52 @@ function solveNaive(baseP,Catt,Cres,N,K,b5,b10){
   }
   return C;
 }
+function evalCostWithPolicy(pol,baseP,Catt,Cres,N,K,b5,b10){
+  let C=1e8;
+  for(let iter=0;iter<800;iter++){
+    const V=[];
+    for(let s=0;s<=K;s++) V.push(new Array(N+2).fill(0));
+    for(let s=K-1;s>=0;s--){
+      for(let f=N-s;f>=0;f--){
+        const rem=N-s-f,need=K-s;
+        if(rem<need){V[s][f]=Cres+C;continue;}
+        const d=pol[s]&&pol[s][f];
+        if(d==='reset'){V[s][f]=Cres+C;}
+        else{
+          const slot=s+f+1;
+          const p=slotP(slot,baseP,b5,b10);
+          const vS=(s+1>=K)?0:V[s+1][f];
+          const remF=N-s-(f+1);
+          const vF=(remF<need)?(Cres+C):V[s][f+1];
+          V[s][f]=Catt+p*vS+(1-p)*vF;
+        }
+      }
+    }
+    const newC=V[0][0];
+    if(Math.abs(newC-C)<0.5){C=newC;break;}
+    C=newC;
+  }
+  return C;
+}
 
 function update(){
+  // Enforce K ≤ N
+  const Kel=document.getElementById('K'),Nel=document.getElementById('N');
+  Kel.max=Nel.value;
+  if(+Kel.value>+Nel.value) Kel.value=Nel.value;
+
   const baseP=+document.getElementById('p').value/100;
   const Catt=+document.getElementById('catt').value;
+  const Cmeso=+document.getElementById('cmeso').value;
   const Cres=+document.getElementById('cres').value;
-  const K=+document.getElementById('K').value;
-  const N=+document.getElementById('N').value;
+  const K=+Kel.value;
+  const N=+Nel.value;
   const b5=+document.getElementById('b5').value/100;
   const b10=+document.getElementById('b10').value/100;
 
   document.getElementById('p-out').textContent=Math.round(baseP*100)+'%';
   document.getElementById('catt-out').textContent=Catt.toLocaleString();
+  document.getElementById('cmeso-out').textContent=Cmeso.toLocaleString();
   document.getElementById('cres-out').textContent=Cres.toLocaleString();
   document.getElementById('K-out').textContent=K;
   document.getElementById('N-out').textContent=N;
@@ -399,6 +456,12 @@ function update(){
   document.getElementById('ev-opt').textContent=Math.round(C).toLocaleString();
   document.getElementById('ev-naive').textContent=Math.round(Cnaive).toLocaleString();
   document.getElementById('ev-save').textContent=Math.max(0,Math.round(Cnaive-C)).toLocaleString();
+
+  const mesoOpt=evalCostWithPolicy(pol,baseP,Cmeso,0,N,K,b5,b10);
+  const mesoNaive=solveNaive(baseP,Cmeso,0,N,K,b5,b10);
+  document.getElementById('meso-opt').textContent=Math.round(mesoOpt).toLocaleString();
+  document.getElementById('meso-naive').textContent=Math.round(mesoNaive).toLocaleString();
+  document.getElementById('meso-save').textContent=Math.max(0,Math.round(mesoNaive-mesoOpt)).toLocaleString();
 
   // Build table: rows = slot number 1..N, cols = successes 0..K
   // Cell (slot, s): failures = slot-1-s, must be >= 0
@@ -456,8 +519,8 @@ function update(){
   document.getElementById('ptable').innerHTML=html;
 }
 
-const ids=['p','catt','cres','K','N','b5','b10'];
-const DEFAULTS={p:'20',catt:'1200',cres:'50',K:'4',N:'10',b5:'10',b10:'20'};
+const ids=['p','catt','cmeso','cres','K','N','b5','b10'];
+const DEFAULTS={p:'20',catt:'1200',cmeso:'75000',cres:'50',K:'4',N:'10',b5:'10',b10:'20'};
 const STORAGE_KEY='spelltrace_params';
 
 function loadParams(){
