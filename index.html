@@ -228,6 +228,47 @@
     margin:-6px 0 14px;
     line-height:1.5;
   }
+
+  .checklist{
+    list-style:none;
+    margin:0;
+    padding:0;
+    display:grid;
+    gap:8px;
+  }
+  .check-item{
+    display:grid;
+    grid-template-columns:110px 1fr;
+    gap:10px;
+    align-items:start;
+    padding:9px 10px;
+    border-radius:var(--radius-sm);
+    background:var(--bg-card-alt);
+    border:1px solid var(--border);
+  }
+  .check-slot{
+    font-size:.68rem;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.05em;
+    color:var(--accent);
+    white-space:nowrap;
+    padding-top:1px;
+  }
+  .check-rule{
+    font-size:.78rem;
+    color:var(--text-secondary);
+    line-height:1.45;
+  }
+  .check-empty{
+    font-size:.78rem;
+    color:var(--text-muted);
+    padding:8px 2px;
+  }
+  @media(max-width:640px){
+    .check-item{grid-template-columns:1fr}
+    .check-slot{white-space:normal}
+  }
 </style>
 </head>
 <body>
@@ -338,6 +379,12 @@
   </div>
 </div>
 
+<div class="card">
+  <h3>Quick Reset Checklist</h3>
+  <p class="map-description">At each slot, compare your current successes so far, then follow the rule below.</p>
+  <ul id="reset-checklist" class="checklist"></ul>
+</div>
+
 </div><!-- page-wrap -->
 
 <script>
@@ -346,15 +393,70 @@ function slotP(slot,baseP,b5,b10){
   if(slot===10) return Math.min(1,baseP+b10);
   return baseP;
 }
+function makeGrid(rows,cols,fill){
+  const grid=[];
+  for(let row=0;row<rows;row++) grid.push(new Array(cols).fill(fill));
+  return grid;
+}
+function buildAttemptPolicy(N,K){
+  const pol=makeGrid(K+1,N+2,'');
+  for(let s=0;s<K;s++){
+    for(let f=0;f<=N-s;f++){
+      pol[s][f]=(N-s-f<K-s)?'forced':'attempt';
+    }
+  }
+  return pol;
+}
+function evaluatePolicy(pol,baseP,Catt,Cres,N,K,b5,b10){
+  const A=makeGrid(K+1,N+2,0);
+  const B=makeGrid(K+1,N+2,0);
+
+  for(let s=K-1;s>=0;s--){
+    for(let f=N-s;f>=0;f--){
+      const rem=N-s-f,need=K-s;
+      const d=rem<need?'forced':((pol[s]&&pol[s][f])||'attempt');
+      if(d==='reset'||d==='forced'){
+        A[s][f]=Cres;
+        B[s][f]=1;
+        continue;
+      }
+
+      const slot=s+f+1;
+      const p=slotP(slot,baseP,b5,b10);
+      const aS=(s+1>=K)?0:A[s+1][f];
+      const bS=(s+1>=K)?0:B[s+1][f];
+      const remF=N-s-(f+1);
+      const aF=(remF<need)?Cres:A[s][f+1];
+      const bF=(remF<need)?1:B[s][f+1];
+
+      A[s][f]=Catt+p*aS+(1-p)*aF;
+      B[s][f]=p*bS+(1-p)*bF;
+    }
+  }
+
+  const denom=1-B[0][0];
+  const C=denom<=1e-12?Infinity:A[0][0]/denom;
+  const V=makeGrid(K+1,N+2,0);
+  for(let s=0;s<=K;s++){
+    for(let f=0;f<=N+1;f++) V[s][f]=A[s][f]+B[s][f]*C;
+  }
+  return{C,V};
+}
 function solveDP(baseP,Catt,Cres,N,K,b5,b10){
-  let C=1e8,V,pol;
-  for(let iter=0;iter<800;iter++){
-    V=[];pol=[];
-    for(let s=0;s<=K;s++){V.push(new Array(N+2).fill(0));pol.push(new Array(N+2).fill(''));}
+  const pol=buildAttemptPolicy(N,K);
+  for(let iter=0;iter<128;iter++){
+    const solved=evaluatePolicy(pol,baseP,Catt,Cres,N,K,b5,b10);
+    const{C,V}=solved;
+    let changed=false;
+
     for(let s=K-1;s>=0;s--){
       for(let f=N-s;f>=0;f--){
         const rem=N-s-f,need=K-s;
-        if(rem<need){V[s][f]=Cres+C;pol[s][f]='forced';continue;}
+        if(rem<need){
+          pol[s][f]='forced';
+          continue;
+        }
+
         const slot=s+f+1;
         const p=slotP(slot,baseP,b5,b10);
         const vS=(s+1>=K)?0:V[s+1][f];
@@ -362,65 +464,108 @@ function solveDP(baseP,Catt,Cres,N,K,b5,b10){
         const vF=(remF<need)?(Cres+C):V[s][f+1];
         const vAtt=Catt+p*vS+(1-p)*vF;
         const vRes=Cres+C;
-        if(vAtt<=vRes){V[s][f]=vAtt;pol[s][f]='attempt';}
-        else{V[s][f]=vRes;pol[s][f]='reset';}
-      }
-    }
-    const newC=V[0][0];
-    if(Math.abs(newC-C)<0.5){C=newC;break;}
-    C=newC;
-  }
-  return{C,V,pol};
-}
-function solveNaive(baseP,Catt,Cres,N,K,b5,b10){
-  let C=1e8;
-  for(let iter=0;iter<800;iter++){
-    const V=[];
-    for(let s=0;s<=K;s++) V.push(new Array(N+2).fill(0));
-    for(let s=K-1;s>=0;s--){
-      for(let f=N-s;f>=0;f--){
-        const rem=N-s-f,need=K-s;
-        if(rem<need){V[s][f]=Cres+C;continue;}
-        const slot=s+f+1;
-        const p=slotP(slot,baseP,b5,b10);
-        const vS=(s+1>=K)?0:V[s+1][f];
-        const remF=N-s-(f+1);
-        const vF=(remF<need)?(Cres+C):V[s][f+1];
-        V[s][f]=Catt+p*vS+(1-p)*vF;
-      }
-    }
-    const newC=V[0][0];
-    if(Math.abs(newC-C)<0.5){C=newC;break;}
-    C=newC;
-  }
-  return C;
-}
-function evalCostWithPolicy(pol,baseP,Catt,Cres,N,K,b5,b10){
-  let C=1e8;
-  for(let iter=0;iter<800;iter++){
-    const V=[];
-    for(let s=0;s<=K;s++) V.push(new Array(N+2).fill(0));
-    for(let s=K-1;s>=0;s--){
-      for(let f=N-s;f>=0;f--){
-        const rem=N-s-f,need=K-s;
-        if(rem<need){V[s][f]=Cres+C;continue;}
-        const d=pol[s]&&pol[s][f];
-        if(d==='reset'){V[s][f]=Cres+C;}
-        else{
-          const slot=s+f+1;
-          const p=slotP(slot,baseP,b5,b10);
-          const vS=(s+1>=K)?0:V[s+1][f];
-          const remF=N-s-(f+1);
-          const vF=(remF<need)?(Cres+C):V[s][f+1];
-          V[s][f]=Catt+p*vS+(1-p)*vF;
+        const next=vAtt<=vRes?'attempt':'reset';
+        if(pol[s][f]!==next){
+          pol[s][f]=next;
+          changed=true;
         }
       }
     }
-    const newC=V[0][0];
-    if(Math.abs(newC-C)<0.5){C=newC;break;}
-    C=newC;
+
+    if(!changed) return{C,V,pol};
   }
-  return C;
+  const solved=evaluatePolicy(pol,baseP,Catt,Cres,N,K,b5,b10);
+  return{C:solved.C,V:solved.V,pol};
+}
+function solveNaive(baseP,Catt,Cres,N,K,b5,b10){
+  return evaluatePolicy(buildAttemptPolicy(N,K),baseP,Catt,Cres,N,K,b5,b10).C;
+}
+function evalCostWithPolicy(pol,baseP,Catt,Cres,N,K,b5,b10){
+  return evaluatePolicy(pol,baseP,Catt,Cres,N,K,b5,b10).C;
+}
+function formatRanges(values){
+  if(!values.length) return 'none';
+  const nums=values.slice().sort((a,b)=>a-b);
+  const parts=[];
+  let start=nums[0],prev=nums[0];
+  for(let i=1;i<nums.length;i++){
+    const cur=nums[i];
+    if(cur===prev+1){
+      prev=cur;
+      continue;
+    }
+    parts.push(start===prev?`${start}`:`${start}-${prev}`);
+    start=prev=cur;
+  }
+  parts.push(start===prev?`${start}`:`${start}-${prev}`);
+  return parts.join(', ');
+}
+function isSuffixPattern(possible,attempt){
+  if(!attempt.length) return false;
+  const p=possible.slice().sort((a,b)=>a-b);
+  const a=attempt.slice().sort((a,b)=>a-b);
+  const threshold=a[0];
+  const suffix=p.filter(v=>v>=threshold);
+  return suffix.length===a.length&&suffix.every((v,i)=>v===a[i]);
+}
+function isPrefixPattern(possible,attempt){
+  if(!attempt.length) return false;
+  const p=possible.slice().sort((a,b)=>a-b);
+  const a=attempt.slice().sort((a,b)=>a-b);
+  const threshold=a[a.length-1];
+  const prefix=p.filter(v=>v<=threshold);
+  return prefix.length===a.length&&prefix.every((v,i)=>v===a[i]);
+}
+function buildChecklist(pol,N,K){
+  const lines=[];
+  for(let slot=1;slot<=N;slot++){
+    const possibleS=[];
+    const attemptS=[];
+    const resetS=[];
+    const forcedS=[];
+
+    for(let s=0;s<K;s++){
+      const f=slot-1-s;
+      if(f<0) continue;
+
+      const rem=N-s-f,need=K-s;
+      if(rem<need){
+        forcedS.push(s);
+        continue;
+      }
+
+      const d=(pol[s]&&pol[s][f])||'attempt';
+      possibleS.push(s);
+      if(d==='attempt') attemptS.push(s);
+      else if(d==='reset') resetS.push(s);
+      else if(d==='forced') forcedS.push(s);
+    }
+
+    if(!possibleS.length) continue;
+
+    let text='';
+    if(attemptS.length===0){
+      text='Reset now for all feasible success counts.';
+    } else if(resetS.length===0){
+      text='Attempt for all feasible success counts.';
+    } else if(isSuffixPattern(possibleS,attemptS)){
+      const threshold=Math.min(...attemptS);
+      text=`Attempt if successes so far >= ${threshold}; otherwise reset.`;
+    } else if(isPrefixPattern(possibleS,attemptS)){
+      const threshold=Math.max(...attemptS);
+      text=`Attempt if successes so far <= ${threshold}; otherwise reset.`;
+    } else {
+      text=`Attempt at successes ${formatRanges(attemptS)}; reset at successes ${formatRanges(resetS)}.`;
+    }
+
+    if(forcedS.length){
+      const forcedMax=Math.max(...forcedS);
+      text+=` Forced reset when successes so far <= ${forcedMax} (target unreachable from this slot).`;
+    }
+
+    lines.push({slot,text,bonus:slot===5||slot===10});
+  }
+  return lines;
 }
 
 function update(){
@@ -517,6 +662,11 @@ function update(){
   }
   html+=`</tbody>`;
   document.getElementById('ptable').innerHTML=html;
+
+  const checklist=buildChecklist(pol,N,K);
+  document.getElementById('reset-checklist').innerHTML=checklist.length
+    ? checklist.map(item=>`<li class="check-item"><span class="check-slot">slot ${item.slot}${item.bonus?' ★':''}</span><span class="check-rule">${item.text}</span></li>`).join('')
+    : `<li class="check-empty">No incomplete states to evaluate.</li>`;
 }
 
 const ids=['p','catt','cmeso','cres','K','N','b5','b10'];
